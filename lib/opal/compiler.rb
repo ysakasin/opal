@@ -172,7 +172,7 @@ module Opal
     def compile
       parse
 
-      @fragments = process(@sexp).flatten
+      @fragments = re_raise_with_location { process(@sexp).flatten }
 
       @result = @fragments.map(&:code).join('')
     end
@@ -183,11 +183,7 @@ module Opal
 
       @parser = Opal::Parser.default_parser
 
-      begin
-        sexp, comments, tokens = @parser.tokenize(@buffer)
-      rescue ::Opal::Error, ::Parser::SyntaxError => error
-        raise ::Opal::SyntaxError.with_opal_backtrace(error, file)
-      end
+      sexp, comments, tokens = re_raise_with_location { @parser.tokenize(@buffer) }
 
       @sexp = s(:top, sexp || s(:nil))
       @comments = ::Parser::Source::Comment.associate_locations(sexp, comments)
@@ -226,7 +222,21 @@ module Opal
     # method simply appends the filename and curent line number onto
     # the message and raises it.
     def error(msg, line = nil)
-      raise ::Opal::SyntaxError, "#{msg} -- #{file}:#{line}"
+      error = ::Opal::SyntaxError.new(msg)
+      error.location = Opal::OpalBacktraceLocation.new(file, line)
+      raise error
+    end
+
+    def re_raise_with_location
+      yield
+    rescue ::Opal::Error, ::Opal::SyntaxError, ::Parser::SyntaxError, StandardError => error
+      opal_location = ::Opal.opal_location_from_error(error)
+      opal_location.path = file
+      opal_location.label ||= @source.lines[opal_location.line.to_i - 1].strip
+      new_error = ::Opal::SyntaxError.new(error.message)
+      new_error.set_backtrace error.backtrace
+      ::Opal.add_opal_location_to_error(opal_location, new_error)
+      raise new_error
     end
 
     # This is called when a parsing/processing warning occurs. This
